@@ -1,0 +1,40 @@
+const BASE_URL = 'http://localhost:3333';
+
+async function request(path, options = {}) {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.headers || {})
+    },
+    ...options
+  });
+
+  const data = await res.json().catch(() => ({}));
+
+  if (!res.ok) {
+    throw new Error(data.error || 'Erro na requisição');
+  }
+
+  return data;
+}
+
+export async function registerClient({ name, email, password }) {
+  return request('/auth/register-client', {
+    method: 'POST',
+    body: JSON.stringify({ name, email, password })
+  });
+}
+
+export async function registerSacerdote({ name, email, password, inviteCode }) {
+  return request('/auth/register-sacerdote', {
+    method: 'POST',
+    body: JSON.stringify({ name, email, password, inviteCode })
+  });
+}
+
+export async function login({ email, password, role }) {
+  return request('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password, role })
+  });
+}
