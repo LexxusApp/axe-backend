@@ -52,11 +52,12 @@ exports.registerClient = async (req, res) => {
 
 exports.registerSacerdote = async (req, res) => {
   try {
-    const { invitationCode, name, email, phone, password } = req.body || {};
+    const { name, email, phone, password, invitationCode, inviteCode } = req.body || {};
+const code = invitationCode || inviteCode;
 
-    if (!invitationCode) {
-      return res.status(400).json({ error: 'Código de convite é obrigatório.' });
-    }
+if (!code) {
+  return res.status(400).json({ error: 'Código de convite é obrigatório.' });
+}
 
     const expectedCode = process.env.SACERDOTE_INVITE_CODE || 'AXE-2026';
     if (String(invitationCode).trim() !== String(expectedCode).trim()) {
