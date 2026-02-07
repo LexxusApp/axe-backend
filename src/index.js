@@ -32,8 +32,19 @@ async function ensureDb() {
     );
   `);
 }
+<<<<<<< HEAD
 
 const PORT = process.env.PORT || 3333;
+=======
+
+const PORT = process.env.PORT || 3333;
+<<<<<<< HEAD
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`🔥 Backend rodando na porta ${PORT}`);
+});
+
+=======
+>>>>>>> 24ab9b4 (fix: aceitar invitationCode ou inviteCode no cadastro de sacerdote)
 
 ensureDb()
   .then(() => {
@@ -45,3 +56,7 @@ ensureDb()
     console.error('❌ Falha ao preparar DB:', err);
     process.exit(1);
   });
+<<<<<<< HEAD
+=======
+>>>>>>> bb273ab (use postgres for auth users)
+>>>>>>> 24ab9b4 (fix: aceitar invitationCode ou inviteCode no cadastro de sacerdote)
