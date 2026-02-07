@@ -1,123 +1,124 @@
 const bcrypt = require('bcryptjs');
 
-// "banco" temporário em memória
+// "Banco" em memória (somente para MVP)
+// Depois trocamos por banco real (Postgres no Railway)
 const users = [];
 
-// convite sacerdote
-const SACERDOTE_INVITE_CODE = process.env.SACERDOTE_INVITE_CODE || 'AXE-2026';
-
-function sanitizeUser(user) {
-  const { passwordHash, ...safe } = user;
-  return safe;
+// helper: remove senha do retorno
+function publicUser(u) {
+  const { passwordHash, ...rest } = u;
+  return rest;
 }
 
-async function registerClient(req, res) {
+function normalizeRole(role) {
+  if (role === 'client' || role === 'sacerdote') return role;
+  return null;
+}
+
+exports.registerClient = async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, phone, password } = req.body || {};
 
-    if (!name || !email || !password) {
-      return res.status(400).json({ error: 'name, email e password são obrigatórios' });
+    if (!name || !email || !phone || !password) {
+      return res.status(400).json({ error: 'Preencha todos os campos.' });
     }
 
-    const exists = users.find((u) => u.email.toLowerCase() === email.toLowerCase());
+    const exists = users.find((u) => u.email.toLowerCase() === String(email).toLowerCase());
     if (exists) {
-      return res.status(409).json({ error: 'Este email já está cadastrado' });
+      return res.status(409).json({ error: 'E-mail já cadastrado.' });
     }
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await bcrypt.hash(String(password), 10);
 
-    const newUser = {
-      id: `u-${Date.now()}`,
-      name,
-      email,
+    const user = {
+      id: `c-${Date.now()}`,
+      name: String(name),
+      email: String(email),
+      phone: String(phone),
       role: 'client',
-      avatar: 'https://picsum.photos/seed/client/100/100',
+      avatar: `https://i.pravatar.cc/150?u=${encodeURIComponent(String(email))}`,
       passwordHash,
     };
 
-    users.push(newUser);
-
-    return res.status(201).json({
-      message: 'Cliente cadastrado com sucesso',
-      user: sanitizeUser(newUser),
-    });
+    users.push(user);
+    return res.status(201).json({ user: publicUser(user) });
   } catch (err) {
-    return res.status(500).json({ error: 'Erro no cadastro do cliente' });
+    return res.status(500).json({ error: 'Erro interno ao cadastrar cliente.' });
   }
-}
+};
 
-async function registerSacerdote(req, res) {
+exports.registerSacerdote = async (req, res) => {
   try {
-    const { name, email, password, inviteCode } = req.body;
+    const { invitationCode, name, email, phone, password } = req.body || {};
 
-    if (!name || !email || !password || !inviteCode) {
-      return res.status(400).json({ error: 'name, email, password e inviteCode são obrigatórios' });
+    if (!invitationCode) {
+      return res.status(400).json({ error: 'Código de convite é obrigatório.' });
     }
 
-    if (inviteCode !== SACERDOTE_INVITE_CODE) {
-      return res.status(401).json({ error: 'Código de convite inválido' });
+    const expectedCode = process.env.SACERDOTE_INVITE_CODE || 'AXE-2026';
+    if (String(invitationCode).trim() !== String(expectedCode).trim()) {
+      return res.status(401).json({ error: 'Código de convite inválido.' });
     }
 
-    const exists = users.find((u) => u.email.toLowerCase() === email.toLowerCase());
+    if (!name || !email || !phone || !password) {
+      return res.status(400).json({ error: 'Preencha todos os campos.' });
+    }
+
+    const exists = users.find((u) => u.email.toLowerCase() === String(email).toLowerCase());
     if (exists) {
-      return res.status(409).json({ error: 'Este email já está cadastrado' });
+      return res.status(409).json({ error: 'E-mail já cadastrado.' });
     }
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await bcrypt.hash(String(password), 10);
 
-    const newUser = {
+    const user = {
       id: `s-${Date.now()}`,
-      name,
-      email,
+      name: String(name),
+      email: String(email),
+      phone: String(phone),
       role: 'sacerdote',
-      sacerdoteId: `sac-${Date.now()}`,
-      avatar: 'https://picsum.photos/seed/sacerdote/100/100',
+      avatar: `https://i.pravatar.cc/150?u=${encodeURIComponent(String(email))}`,
+      sacerdoteId: `s-${Date.now()}`,
       passwordHash,
     };
 
-    users.push(newUser);
-
-    return res.status(201).json({
-      message: 'Sacerdote cadastrado com sucesso',
-      user: sanitizeUser(newUser),
-    });
+    users.push(user);
+    return res.status(201).json({ user: publicUser(user) });
   } catch (err) {
-    return res.status(500).json({ error: 'Erro no cadastro do sacerdote' });
+    return res.status(500).json({ error: 'Erro interno ao cadastrar sacerdote.' });
   }
-}
+};
 
-async function login(req, res) {
+exports.login = async (req, res) => {
   try {
-    const { email, password, role } = req.body;
+    const { email, password, role } = req.body || {};
 
     if (!email || !password || !role) {
-      return res.status(400).json({ error: 'email, password e role são obrigatórios' });
+      return res.status(400).json({ error: 'Informe e-mail, senha e perfil.' });
+    }
+
+    const normalizedRole = normalizeRole(role);
+    if (!normalizedRole) {
+      return res.status(400).json({ error: 'Perfil inválido.' });
     }
 
     const user = users.find(
-      (u) => u.email.toLowerCase() === email.toLowerCase() && u.role === role
+      (u) =>
+        u.email.toLowerCase() === String(email).toLowerCase() &&
+        u.role === normalizedRole
     );
 
     if (!user) {
-      return res.status(401).json({ error: 'Usuário não encontrado' });
+      return res.status(401).json({ error: 'Usuário não encontrado.' });
     }
 
-    const ok = await bcrypt.compare(password, user.passwordHash);
+    const ok = await bcrypt.compare(String(password), user.passwordHash);
     if (!ok) {
-      return res.status(401).json({ error: 'Senha inválida' });
+      return res.status(401).json({ error: 'Senha inválida.' });
     }
 
-    return res.json({
-      message: 'Login ok',
-      user: sanitizeUser(user),
-    });
+    return res.json({ user: publicUser(user) });
   } catch (err) {
-    return res.status(500).json({ error: 'Erro no login' });
+    return res.status(500).json({ error: 'Erro interno ao fazer login.' });
   }
-}
-
-module.exports = {
-  registerClient,
-  registerSacerdote,
-  login,
 };
