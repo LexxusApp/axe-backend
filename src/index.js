@@ -4,6 +4,8 @@ const cors = require('cors');
 
 const { pool } = require('./db');
 const authRoutes = require('./routes/authRoutes');
+const serviceRoutes = require("./routes/serviceRoutes");
+
 
 const app = express();
 
@@ -15,6 +17,8 @@ app.get('/', (req, res) => {
 });
 
 app.use('/auth', authRoutes);
+app.use("/services", serviceRoutes);
+
 
 // ✅ cria tabela se não existir
 async function ensureDb() {
