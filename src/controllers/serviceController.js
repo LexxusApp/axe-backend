@@ -12,11 +12,42 @@ function mustBeSacerdote(req, res) {
   return true;
 }
 
+function toIntOrNull(v) {
+  if (v === undefined || v === null) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+  return Math.trunc(n);
+}
+
+function toPriceCentsOrNull(v) {
+  if (v === undefined || v === null) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+
+  // aceita "120", "120.5", "120,50"
+  const normalized = s.replace(",", ".");
+  const n = Number(normalized);
+  if (!Number.isFinite(n)) return null;
+
+  // converte reais -> centavos
+  return Math.round(n * 100);
+}
+
+function centsToReais(cents) {
+  if (cents === undefined || cents === null) return undefined;
+  const n = Number(cents);
+  if (!Number.isFinite(n)) return undefined;
+  return n / 100;
+}
+
 exports.createService = async (req, res) => {
   try {
     if (!mustBeSacerdote(req, res)) return;
 
-    const { name, description, price, durationMin } = req.body || {};
+    const { name, description, price, durationMin, category } = req.body || {};
+
     if (!name || !String(name).trim()) {
       return res.status(400).json({ error: "Informe o nome do serviço." });
     }
@@ -24,24 +55,33 @@ exports.createService = async (req, res) => {
     const id = `sv-${Date.now()}`;
     const sacerdoteId = req.user.id;
 
+    const title = String(name).trim();
+    const desc = description ? String(description).trim() : null;
+    const priceCents = toPriceCentsOrNull(price);
+    const durationMinutes = toIntOrNull(durationMin);
+    const cat = category ? String(category).trim() : null;
+
     await pool.query(
       `
-      INSERT INTO services (id, sacerdote_id, name, description, price, duration_min)
-      VALUES ($1,$2,$3,$4,$5,$6)
-      `,
-      [
+      INSERT INTO services (
         id,
-        sacerdoteId,
-        String(name).trim(),
-        description ? String(description).trim() : null,
-        price !== undefined && price !== null && String(price).trim() !== "" ? Number(price) : null,
-        durationMin !== undefined && durationMin !== null && String(durationMin).trim() !== "" ? Number(durationMin) : null,
-      ]
+        sacerdote_id,
+        title,
+        description,
+        price_cents,
+        duration_minutes,
+        category,
+        active,
+        created_at
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE,NOW())
+      `,
+      [id, sacerdoteId, title, desc, priceCents, durationMinutes, cat]
     );
 
     return res.status(201).json({ ok: true, id });
   } catch (err) {
-    console.error(err);
+    console.error("createService error:", err);
     return res.status(500).json({ error: "Erro ao criar serviço." });
   }
 };
@@ -50,16 +90,23 @@ exports.listMyServices = async (req, res) => {
   try {
     if (!req.user?.id) return res.status(401).json({ error: "Não autenticado." });
 
-    const userId = req.user.id;
-
-    // sacerdote lista os dele; (se um dia quiser client ver catálogo, faz outra rota)
     if (req.user.role !== "sacerdote") {
       return res.status(403).json({ error: "Apenas sacerdote pode listar seus serviços." });
     }
 
+    const userId = req.user.id;
+
     const result = await pool.query(
       `
-      SELECT id, name, description, price, duration_min, active, created_at
+      SELECT
+        id,
+        title,
+        description,
+        price_cents,
+        duration_minutes,
+        category,
+        active,
+        created_at
       FROM services
       WHERE sacerdote_id = $1
       ORDER BY created_at DESC
@@ -69,17 +116,21 @@ exports.listMyServices = async (req, res) => {
 
     const services = result.rows.map((r) => ({
       id: r.id,
-      name: r.name,
+      name: r.title,
       description: r.description || undefined,
-      price: r.price !== null && r.price !== undefined ? Number(r.price) : undefined,
-      durationMin: r.duration_min !== null && r.duration_min !== undefined ? Number(r.duration_min) : undefined,
+      price: centsToReais(r.price_cents),
+      durationMin:
+        r.duration_minutes !== null && r.duration_minutes !== undefined
+          ? Number(r.duration_minutes)
+          : undefined,
+      category: r.category || undefined,
       active: r.active !== false,
       createdAt: r.created_at ? new Date(r.created_at).toISOString() : undefined,
     }));
 
     return res.json({ services });
   } catch (err) {
-    console.error(err);
+    console.error("listMyServices error:", err);
     return res.status(500).json({ error: "Erro ao listar serviços." });
   }
 };
@@ -91,36 +142,36 @@ exports.updateService = async (req, res) => {
     const serviceId = String(req.params?.id || "").trim();
     if (!serviceId) return res.status(400).json({ error: "ID inválido." });
 
-    const { name, description, price, durationMin, active } = req.body || {};
+    const { name, description, price, durationMin, category, active } = req.body || {};
+
+    const title = name !== undefined ? String(name).trim() : null;
+    const desc = description !== undefined ? String(description).trim() : null;
+    const priceCents = price !== undefined ? toPriceCentsOrNull(price) : null;
+    const durationMinutes = durationMin !== undefined ? toIntOrNull(durationMin) : null;
+    const cat = category !== undefined ? String(category).trim() : null;
+    const activeBool = typeof active === "boolean" ? active : null;
 
     const upd = await pool.query(
       `
       UPDATE services
       SET
-        name = COALESCE($1, name),
+        title = COALESCE($1, title),
         description = COALESCE($2, description),
-        price = $3,
-        duration_min = $4,
-        active = COALESCE($5, active)
-      WHERE id = $6 AND sacerdote_id = $7
+        price_cents = COALESCE($3, price_cents),
+        duration_minutes = COALESCE($4, duration_minutes),
+        category = COALESCE($5, category),
+        active = COALESCE($6, active)
+      WHERE id = $7 AND sacerdote_id = $8
       RETURNING id
       `,
-      [
-        name !== undefined ? String(name).trim() : null,
-        description !== undefined ? String(description).trim() : null,
-        price !== undefined && price !== null && String(price).trim() !== "" ? Number(price) : null,
-        durationMin !== undefined && durationMin !== null && String(durationMin).trim() !== "" ? Number(durationMin) : null,
-        typeof active === "boolean" ? active : null,
-        serviceId,
-        req.user.id,
-      ]
+      [title, desc, priceCents, durationMinutes, cat, activeBool, serviceId, req.user.id]
     );
 
     if (!upd.rowCount) return res.status(404).json({ error: "Serviço não encontrado." });
 
     return res.json({ ok: true });
   } catch (err) {
-    console.error(err);
+    console.error("updateService error:", err);
     return res.status(500).json({ error: "Erro ao atualizar serviço." });
   }
 };
@@ -141,7 +192,7 @@ exports.deleteService = async (req, res) => {
 
     return res.json({ ok: true });
   } catch (err) {
-    console.error(err);
+    console.error("deleteService error:", err);
     return res.status(500).json({ error: "Erro ao deletar serviço." });
   }
 };
