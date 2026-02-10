@@ -1,64 +1,65 @@
-const pool = require("../db");
+const { pool } = require("../db");
 
-// Helpers
-function toInt(v, fallback = null) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
+function mustBeSacerdote(req, res) {
+  if (!req.user?.id) {
+    res.status(401).json({ error: "Não autenticado." });
+    return false;
+  }
+  if (req.user.role !== "sacerdote") {
+    res.status(403).json({ error: "Apenas sacerdote pode gerenciar serviços." });
+    return false;
+  }
+  return true;
 }
 
 exports.createService = async (req, res) => {
   try {
-    const userId = req.user?.id;
-    const role = req.user?.role;
+    if (!mustBeSacerdote(req, res)) return;
 
-    if (!userId) return res.status(401).json({ error: "Não autenticado." });
-    if (role !== "sacerdote")
-      return res.status(403).json({ error: "Apenas sacerdote pode criar serviços." });
-
-    const { title, description, priceCents, durationMinutes, category, active } = req.body || {};
-
-    if (!title || !priceCents || !durationMinutes) {
-      return res.status(400).json({ error: "title, priceCents e durationMinutes são obrigatórios." });
+    const { name, description, price, durationMin } = req.body || {};
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ error: "Informe o nome do serviço." });
     }
 
-    const price_cents = toInt(priceCents);
-    const duration_minutes = toInt(durationMinutes);
+    const id = `sv-${Date.now()}`;
+    const sacerdoteId = req.user.id;
 
-    if (!Number.isFinite(price_cents) || price_cents <= 0) {
-      return res.status(400).json({ error: "priceCents inválido." });
-    }
-    if (!Number.isFinite(duration_minutes) || duration_minutes <= 0) {
-      return res.status(400).json({ error: "durationMinutes inválido." });
-    }
-
-    const result = await pool.query(
+    await pool.query(
       `
-      INSERT INTO services (sacerdote_id, title, description, price_cents, duration_minutes, category, active)
-      VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, true))
-      RETURNING id, sacerdote_id, title, description, price_cents, duration_minutes, category, active, created_at
+      INSERT INTO services (id, sacerdote_id, name, description, price, duration_min)
+      VALUES ($1,$2,$3,$4,$5,$6)
       `,
-      [userId, title, description || "", price_cents, duration_minutes, category || "", active]
+      [
+        id,
+        sacerdoteId,
+        String(name).trim(),
+        description ? String(description).trim() : null,
+        price !== undefined && price !== null && String(price).trim() !== "" ? Number(price) : null,
+        durationMin !== undefined && durationMin !== null && String(durationMin).trim() !== "" ? Number(durationMin) : null,
+      ]
     );
 
-    return res.status(201).json({ service: result.rows[0] });
+    return res.status(201).json({ ok: true, id });
   } catch (err) {
-    console.error("createService error:", err);
+    console.error(err);
     return res.status(500).json({ error: "Erro ao criar serviço." });
   }
 };
 
 exports.listMyServices = async (req, res) => {
   try {
-    const userId = req.user?.id;
-    const role = req.user?.role;
+    if (!req.user?.id) return res.status(401).json({ error: "Não autenticado." });
 
-    if (!userId) return res.status(401).json({ error: "Não autenticado." });
-    if (role !== "sacerdote")
-      return res.status(403).json({ error: "Apenas sacerdote pode ver seus serviços." });
+    const userId = req.user.id;
+
+    // sacerdote lista os dele; (se um dia quiser client ver catálogo, faz outra rota)
+    if (req.user.role !== "sacerdote") {
+      return res.status(403).json({ error: "Apenas sacerdote pode listar seus serviços." });
+    }
 
     const result = await pool.query(
       `
-      SELECT id, sacerdote_id, title, description, price_cents, duration_minutes, category, active, created_at
+      SELECT id, name, description, price, duration_min, active, created_at
       FROM services
       WHERE sacerdote_id = $1
       ORDER BY created_at DESC
@@ -66,101 +67,81 @@ exports.listMyServices = async (req, res) => {
       [userId]
     );
 
-    return res.json({ services: result.rows });
+    const services = result.rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      description: r.description || undefined,
+      price: r.price !== null && r.price !== undefined ? Number(r.price) : undefined,
+      durationMin: r.duration_min !== null && r.duration_min !== undefined ? Number(r.duration_min) : undefined,
+      active: r.active !== false,
+      createdAt: r.created_at ? new Date(r.created_at).toISOString() : undefined,
+    }));
+
+    return res.json({ services });
   } catch (err) {
-    console.error("listMyServices error:", err);
+    console.error(err);
     return res.status(500).json({ error: "Erro ao listar serviços." });
   }
 };
 
 exports.updateService = async (req, res) => {
   try {
-    const userId = req.user?.id;
-    const role = req.user?.role;
-    const { id } = req.params;
+    if (!mustBeSacerdote(req, res)) return;
 
-    if (!userId) return res.status(401).json({ error: "Não autenticado." });
-    if (role !== "sacerdote")
-      return res.status(403).json({ error: "Apenas sacerdote pode editar serviços." });
+    const serviceId = String(req.params?.id || "").trim();
+    if (!serviceId) return res.status(400).json({ error: "ID inválido." });
 
-    const { title, description, priceCents, durationMinutes, category, active } = req.body || {};
+    const { name, description, price, durationMin, active } = req.body || {};
 
-    // Pega serviço e valida dono
-    const current = await pool.query(
-      `SELECT id, sacerdote_id FROM services WHERE id = $1`,
-      [id]
-    );
-
-    if (!current.rows.length) return res.status(404).json({ error: "Serviço não encontrado." });
-    if (current.rows[0].sacerdote_id !== userId)
-      return res.status(403).json({ error: "Você não pode editar um serviço de outro sacerdote." });
-
-    const fields = [];
-    const values = [];
-    let idx = 1;
-
-    if (title !== undefined) { fields.push(`title = $${idx++}`); values.push(title); }
-    if (description !== undefined) { fields.push(`description = $${idx++}`); values.push(description); }
-    if (category !== undefined) { fields.push(`category = $${idx++}`); values.push(category); }
-    if (active !== undefined) { fields.push(`active = $${idx++}`); values.push(!!active); }
-
-    if (priceCents !== undefined) {
-      const v = toInt(priceCents);
-      if (!Number.isFinite(v) || v <= 0) return res.status(400).json({ error: "priceCents inválido." });
-      fields.push(`price_cents = $${idx++}`); values.push(v);
-    }
-
-    if (durationMinutes !== undefined) {
-      const v = toInt(durationMinutes);
-      if (!Number.isFinite(v) || v <= 0) return res.status(400).json({ error: "durationMinutes inválido." });
-      fields.push(`duration_minutes = $${idx++}`); values.push(v);
-    }
-
-    if (!fields.length) return res.status(400).json({ error: "Nada para atualizar." });
-
-    values.push(id);
-
-    const result = await pool.query(
+    const upd = await pool.query(
       `
       UPDATE services
-      SET ${fields.join(", ")}
-      WHERE id = $${idx}
-      RETURNING id, sacerdote_id, title, description, price_cents, duration_minutes, category, active, created_at
+      SET
+        name = COALESCE($1, name),
+        description = COALESCE($2, description),
+        price = $3,
+        duration_min = $4,
+        active = COALESCE($5, active)
+      WHERE id = $6 AND sacerdote_id = $7
+      RETURNING id
       `,
-      values
+      [
+        name !== undefined ? String(name).trim() : null,
+        description !== undefined ? String(description).trim() : null,
+        price !== undefined && price !== null && String(price).trim() !== "" ? Number(price) : null,
+        durationMin !== undefined && durationMin !== null && String(durationMin).trim() !== "" ? Number(durationMin) : null,
+        typeof active === "boolean" ? active : null,
+        serviceId,
+        req.user.id,
+      ]
     );
 
-    return res.json({ service: result.rows[0] });
+    if (!upd.rowCount) return res.status(404).json({ error: "Serviço não encontrado." });
+
+    return res.json({ ok: true });
   } catch (err) {
-    console.error("updateService error:", err);
+    console.error(err);
     return res.status(500).json({ error: "Erro ao atualizar serviço." });
   }
 };
 
 exports.deleteService = async (req, res) => {
   try {
-    const userId = req.user?.id;
-    const role = req.user?.role;
-    const { id } = req.params;
+    if (!mustBeSacerdote(req, res)) return;
 
-    if (!userId) return res.status(401).json({ error: "Não autenticado." });
-    if (role !== "sacerdote")
-      return res.status(403).json({ error: "Apenas sacerdote pode excluir serviços." });
+    const serviceId = String(req.params?.id || "").trim();
+    if (!serviceId) return res.status(400).json({ error: "ID inválido." });
 
-    const current = await pool.query(
-      `SELECT id, sacerdote_id FROM services WHERE id = $1`,
-      [id]
+    const del = await pool.query(
+      `DELETE FROM services WHERE id = $1 AND sacerdote_id = $2 RETURNING id`,
+      [serviceId, req.user.id]
     );
 
-    if (!current.rows.length) return res.status(404).json({ error: "Serviço não encontrado." });
-    if (current.rows[0].sacerdote_id !== userId)
-      return res.status(403).json({ error: "Você não pode excluir um serviço de outro sacerdote." });
-
-    await pool.query(`DELETE FROM services WHERE id = $1`, [id]);
+    if (!del.rowCount) return res.status(404).json({ error: "Serviço não encontrado." });
 
     return res.json({ ok: true });
   } catch (err) {
-    console.error("deleteService error:", err);
-    return res.status(500).json({ error: "Erro ao excluir serviço." });
+    console.error(err);
+    return res.status(500).json({ error: "Erro ao deletar serviço." });
   }
 };

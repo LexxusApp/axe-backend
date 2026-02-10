@@ -66,6 +66,27 @@ async function ensureDb() {
     CREATE INDEX IF NOT EXISTS appointments_client_idx
     ON appointments (client_id, date_at);
   `);
+    // ===============================
+  // SERVICES (serviços do sacerdote)
+  // ===============================
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS services (
+      id TEXT PRIMARY KEY,
+      sacerdote_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      price NUMERIC,
+      duration_min INTEGER,
+      active BOOLEAN DEFAULT TRUE,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS services_sacerdote_idx
+    ON services (sacerdote_id, created_at);
+  `);
+
 }
 
 const PORT = process.env.PORT || 3333;
